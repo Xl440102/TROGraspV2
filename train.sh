@@ -1,0 +1,1 @@
+accelerate launch --config_file /mnt/fx/acc.yaml --machine_rank 0 train.py --config config/train.yaml

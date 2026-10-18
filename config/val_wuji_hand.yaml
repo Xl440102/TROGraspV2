@@ -1,0 +1,96 @@
+dataset:
+  num_workers: 16
+  align_meta_path: 'data/data_urdf/robot/align.pt'
+  data_root: '/mnt/fx/TRO-1B-Dataset/TRO-val-dataset'
+  hand_list: 
+    - "ability_hand"
+    - "allegro_hand"
+    - "barrett_hand"
+    - "dclaw_gripper"
+    - "leaphand"
+    - "shadow_hand"
+    - "schunk_hand"
+    - "xhand"
+    - "wuji_hand"
+  hand_type: 'wuji_hand'
+  batch_size: 10
+  seed: 0
+
+vqvae:
+  vqvae_cfg:
+    n_embeddings: 2048
+    embedding_dim: 128
+    num_point: 25
+    num_dim: 128
+    local_decode_pts: 20
+    beta: 0.25
+    use_vq: True
+  object_pretrain: 'ckpt/object.ckpt'
+  env_pretrain: 'ckpt/env.ckpt'
+
+model:
+  object_patch: 25
+  env_patch: 25
+  max_link_node: 26
+  link_embed_dim: 128
+  edge_embed_dim: 128
+  joint_feat_dim: 128
+  link_pos_dim: 128
+
+  robot_links:
+    allegro_hand: 21
+    barrett_hand: 9
+    shadow_hand: 22
+    leaphand: 17
+    xhand: 18
+    ability_hand: 12
+    schunk_hand: 22
+    dclaw_gripper: 10
+    wuji_hand: 26
+
+  N_t_training: 5
+  diffusion_config:
+    scheduling: cosine
+    M: 1000
+    cosine_s: 0.008
+    ddim_eta: 1.0
+    lambda: 0.2
+
+  denoiser_config:
+    M: 1000
+    t_embed_dim: 128
+    V_object_dims: [3, 128]
+    V_env_dims: [3, 128]
+    V_robot_dims: [3, 3, 128, 128]
+    E_or_dims: [3, 3]
+    E_rr_dims: [3, 3, 128]
+    E_er_dims: [3, 3]
+    v_conv_dim: 768
+    e_conv_dim: 768
+    num_layers: 8
+    c_atten_head: 12
+    v_out_hidden_dims: [512, 256, 128]
+    out_dim: [3, 3]
+
+  inference_config:
+    inference_step: 20
+    is_mount: False
+
+  embodiment:
+    - "ability_hand"
+    - "allegro_hand"
+    - "barrett_hand"
+    - "dclaw_gripper"
+    - "leaphand"
+    - "shadow_hand"
+    - "schunk_hand"
+    - "xhand"
+    - "wuji_hand"
+
+  mode: "test"
+  dtype: bf16
+
+test:
+  embodiment: 'wuji_hand'
+  save_path: './test/wuji_hand.pth'
+  ckpt: './ckpt/nine_hand_with_wuji.pth'
