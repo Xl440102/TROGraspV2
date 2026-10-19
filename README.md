@@ -47,7 +47,7 @@ bash install_isaac.sh
 
 ## Download Dataset and Checkpoint
 
-Pretrained checkpoints are included in `ckpt/`. Download the validation scenes and object assets from [TROV2Dataset](https://huggingface.co/datasets/Barrybarry-Smith/TROV2Dataset) for visualization and inference (`zstd` is required to extract them):
+Pretrained checkpoints are included [ckpt](https://drive.google.com/file/d/1mLTmTMilaS5hLyWo5OskxEn9P96CAVko/view?usp=sharing). Download the validation scenes and object assets from [TROV2Dataset](https://huggingface.co/datasets/Barrybarry-Smith/TROV2Dataset) for visualization and inference (`zstd` is required to extract them):
 
 ```bash
 conda activate TROV2
