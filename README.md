@@ -6,7 +6,7 @@
 
 
 <p align="center">
-    <a href='https://arxiv.org/abs/2510.12724'>
+    <a href='http://arxiv.org/abs/2610.25410'>
       <img src='https://img.shields.io/badge/Paper-arXiv-red?style=plastic&logo=arXiv&logoColor=red' alt='Paper arXiv'>
     </a>
     <a href='https://nus-lins-lab.github.io/TROGrasp2Web/'>
