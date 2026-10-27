@@ -1,0 +1,46 @@
+
+cff-version: 1.2.0
+message: "If you use our code or dataset, please cite our CoRL 2026 paper."
+
+title: "T(R,O) Grasp++"
+authors:
+  - family-names: Fei
+    given-names: Xin
+  - family-names: Xu
+    given-names: Zhixuan
+  - family-names: Fang
+    given-names: Huaicong
+  - family-names: Chen
+    given-names: Fangjun
+  - family-names: Mu
+    given-names: Zhaoyu
+  - family-names: Yang
+    given-names: Rui
+  - family-names: Luo
+    given-names: Zhexi
+  - family-names: Shao
+    given-names: Lin
+
+preferred-citation:
+  type: conference-paper
+  title: "T(R,O) Grasp++: Cross-Embodiment Dexterous Grasping in Cluttered Environments at Scale"
+  authors:
+    - family-names: Fei
+      given-names: Xin
+    - family-names: Xu
+      given-names: Zhixuan
+    - family-names: Fang
+      given-names: Huaicong
+    - family-names: Chen
+      given-names: Fangjun
+    - family-names: Mu
+      given-names: Zhaoyu
+    - family-names: Yang
+      given-names: Rui
+    - family-names: Luo
+      given-names: Zhexi
+    - family-names: Shao
+      given-names: Lin
+  collection-title: "Proceedings of the Conference on Robot Learning (CoRL)"
+  year: 2026
+  url: "https://arxiv.org/abs/2610.25410"

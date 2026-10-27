@@ -167,3 +167,17 @@ python validation/collision_check.py \
   --robot-names xhand
 ```
 
+## Citation
+
+If you find our work, code, or dataset useful for your research, please consider citing our paper:
+
+```bibtex
+@inproceedings{fei2026trograsp,
+  title     = {T(R,O) Grasp++: Cross-Embodiment Dexterous Grasping in Cluttered Environments at Scale},
+  author    = {Fei, Xin and Xu, Zhixuan and Fang, Huaicong and Chen, Fangjun and Mu, Zhaoyu and Yang, Rui and Luo, Zhexi and Shao, Lin},
+  booktitle = {Proceedings of the Conference on Robot Learning (CoRL)},
+  year      = {2026},
+  url       = {https://arxiv.org/abs/2610.25410}
+}
+```
+
