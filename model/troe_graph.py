@@ -396,7 +396,29 @@ class RobotGraph(nn.Module):
 
             return x.detach()
 
-    def inference(self, batch, eps=1e-8):
+    @staticmethod
+    def _make_noise_bank(noise_seeds, num_draws, shape, device, dtype):
+        """Per-candidate Gaussian noise, reproducible from one integer seed each.
+
+        Every candidate draws all the noise it will use (initial noise + per-step
+        DDIM noise) from its own CPU generator in a single call, so a candidate's
+        sample depends only on its seed, not on batch size, chunking or order.
+        Returns [B, num_draws, *shape].
+        """
+        bank = []
+        for seed in noise_seeds:
+            g = torch.Generator(device="cpu")
+            g.manual_seed(int(seed))
+            bank.append(torch.randn((num_draws, *shape), generator=g, dtype=torch.float32))
+        return torch.stack(bank, dim=0).to(device=device, dtype=dtype)
+
+    def inference(self, batch, eps=1e-8, noise_seeds=None):
+        """Reverse DDIM sampling.
+
+        noise_seeds: optional list of B ints. If given, all random noise for
+        candidate b comes from seed noise_seeds[b] (see _make_noise_bank);
+        if None, the original global-RNG behaviour is kept.
+        """
 
         object_pc = batch["object_pc"]
         B = object_pc.shape[0]
@@ -420,13 +442,30 @@ class RobotGraph(nn.Module):
             batch["env_feat"]
         ], dim=-1)  # [B, E, 3+64]
 
+        ## DDIM schedule (computed first so the noise bank knows how many draws)
+        step = self.M // self.inference_step
+        start_t = self.M - 1 - step
+        ddim_t = torch.arange(start_t, -1, -step, device=device, dtype=torch.long)
+
+        noise_bank = None
+        if noise_seeds is not None:
+            assert len(noise_seeds) == B, f"noise_seeds has {len(noise_seeds)} entries, batch has {B}"
+            # draws: [init_trans, init_rot, (z_trans, z_rot) per step]
+            noise_bank = self._make_noise_bank(
+                noise_seeds, 2 + 2 * len(ddim_t), (self.max_link_node, 3), device, dtype
+            )
+
         ## Start from complete noise of link node (pose)
-        noisy_V_R_trans = torch.randn(
-            [B, self.max_link_node, 3], device=device, dtype=dtype
-        )
-        noisy_V_R_rot = torch.randn(
-            [B, self.max_link_node, 3], device=device, dtype=dtype
-        )
+        if noise_bank is None:
+            noisy_V_R_trans = torch.randn(
+                [B, self.max_link_node, 3], device=device, dtype=dtype
+            )
+            noisy_V_R_rot = torch.randn(
+                [B, self.max_link_node, 3], device=device, dtype=dtype
+            )
+        else:
+            noisy_V_R_trans = noise_bank[:, 0]
+            noisy_V_R_rot = noise_bank[:, 1]
         link_robot_embeds = torch.zeros(
             [B, self.max_link_node, self.link_embed_dim], device=device, dtype=dtype
         )
@@ -464,9 +503,6 @@ class RobotGraph(nn.Module):
         noisy_E_ER = relative_pose_6d(noisy_V_R_pose, env_6D_pose)
 
         ## Reverse DDIM
-        step = self.M // self.inference_step
-        start_t = self.M - 1 - step
-        ddim_t = torch.arange(start_t, -1, -step, device=device, dtype=torch.long)
         predict_link_pose_list = []
 
         for i, diffuse_step in enumerate(ddim_t):
@@ -506,9 +542,12 @@ class RobotGraph(nn.Module):
             if i == len(ddim_t) - 1:
                 z_trans = torch.zeros_like(x_0_trans)
                 z_rot = torch.zeros_like(x_0_rot)
-            else:
+            elif noise_bank is None:
                 z_trans = torch.randn_like(x_0_trans)
                 z_rot = torch.randn_like(x_0_rot)
+            else:
+                z_trans = noise_bank[:, 2 + 2 * i].to(x_0_trans.dtype)
+                z_rot = noise_bank[:, 3 + 2 * i].to(x_0_rot.dtype)
 
             noisy_V_R_trans = a_bar_prev.sqrt() * x_0_trans + ddim_coeff * trans_noise + sigma_t * z_trans * self.noise_lambda
             noisy_V_R_rot   = a_bar_prev.sqrt() * x_0_rot   + ddim_coeff * rot_noise   + sigma_t * z_rot   * self.noise_lambda

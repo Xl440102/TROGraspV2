@@ -32,10 +32,14 @@ class TROFilteredIterDataset(Dataset):
         num_env_points: int = 2048,
         dtype: torch.dtype = torch.float32,
         seed: int = 0,
+        max_objects: int = 0,
     ):
         super().__init__()
         self.data_root = f"{data_root}/{hand_type}"
-        self.test_metas = [file.split('.')[0] for file in os.listdir(self.data_root)]
+        # sorted so runs (and --max_objects subsets) are deterministic
+        self.test_metas = sorted(file.split('.')[0] for file in os.listdir(self.data_root))
+        if max_objects:
+            self.test_metas = self.test_metas[:max_objects]
         self.align_meta = torch.load(align_meta_path, map_location="cpu", weights_only=False)
         self.object_pc_root = f"/mnt/fx/TRO-1B-Dataset/object_pc"
         self.hand_type = hand_type
@@ -164,7 +168,8 @@ def create_dataloader(cfg):
         data_root=cfg.data_root,
         hand_type=cfg.hand_type,
         hand_list=cfg.hand_list,
-        seed=cfg.seed
+        seed=cfg.seed,
+        max_objects=int(cfg.get("max_objects", 0) or 0),
     )
 
     dataloader = DataLoader(

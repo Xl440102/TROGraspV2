@@ -5,6 +5,7 @@ from omegaconf import OmegaConf
 
 import os
 import sys
+import zlib
 import jax
 import json
 import yourdfpy
@@ -90,6 +91,32 @@ def compute_orientation_error(pred_se3_dict, target_se3_dict):
 
     avg_error = total / count if count else 0.0
     return errors, avg_error
+
+
+def per_sample_position_error(pred_se3_dict, target_se3_dict):
+    """Mean over links of the position error, per sample -> [B] (meters)."""
+    errs = [
+        torch.norm(pred_se3_dict[n][..., :3, 3] - target_T[..., :3, 3], dim=-1)
+        for n, target_T in target_se3_dict.items() if n in pred_se3_dict
+    ]
+    return torch.stack(errs, dim=0).mean(dim=0)
+
+
+def per_sample_orientation_error(pred_se3_dict, target_se3_dict):
+    """Mean over links of the geodesic rotation error, per sample -> [B] (radians)."""
+    errs = []
+    for n, target_T in target_se3_dict.items():
+        if n not in pred_se3_dict:
+            continue
+        R_diff = pred_se3_dict[n][..., :3, :3] @ target_T[..., :3, :3].transpose(-1, -2)
+        cos_theta = (torch.diagonal(R_diff, dim1=-2, dim2=-1).sum(-1) - 1.0) / 2.0
+        errs.append(torch.acos(torch.clamp(cos_theta, -1.0 + 1e-6, 1.0 - 1e-6)))
+    return torch.stack(errs, dim=0).mean(dim=0)
+
+
+def candidate_seed(base_seed, meta_name, scene_id, sample_id):
+    """Stable 31-bit seed for one candidate; independent of batching and order."""
+    return zlib.crc32(f"{base_seed}/{meta_name}/{scene_id}/{sample_id}".encode()) & 0x7FFFFFFF
 
 
 def add_aux_link_pose(
@@ -243,8 +270,10 @@ def solve_ik_multistart(
     predict_q_candidates = predict_q_flat.reshape(B, num_multistart, -1)
     batch_idx = torch.arange(B, device=device)
     best_predict_q = predict_q_candidates[batch_idx, best_k]
+    # Residual of the chosen multistart solution (all target + aux links), [B]
+    best_err = candidate_err[batch_idx, best_k]
 
-    return best_predict_q
+    return best_predict_q, best_err
 
 
 @torch.no_grad()
@@ -309,6 +338,14 @@ def test(config):
     num_multistart = int(config.test.get("num_multistart", 8))
     root_link_name = root_link_name_dict[robot_name]
 
+    # Test-time scaling settings
+    num_samples = int(config.test.get("num_samples", 1))      # candidates per scene
+    base_seed = int(config.test.get("seed", 0))
+    per_sample_seed = bool(config.test.get("per_sample_seed", True))
+    chunk_size = int(config.test.get("chunk_size", 0))         # 0 = whole batch at once
+    print(f"Using num_samples = {num_samples}, seed = {base_seed}, "
+          f"per_sample_seed = {per_sample_seed}, chunk_size = {chunk_size or 'all'}")
+
     print(f"Using num_multistart = {num_multistart}")
     print(f"Using root_link_name = {root_link_name}")
 
@@ -339,24 +376,45 @@ def test(config):
 
     for batch in dataloader:
 
-        num_object, sample_per_object = batch["robot_id"].shape
+        num_object, num_scene = batch["robot_id"].shape
         meta_names = list(batch["meta_name"])
 
+        # Flatten to [num_object * num_scene * num_samples, ...]:
+        # flat index = (object * num_scene + scene) * num_samples + sample
         for key in ["robot_id", "env_pc", "object_pc"]:
             x = batch[key]
-            batch[key] = x.reshape(
-                num_object * sample_per_object,
-                *x.shape[2:],
-            )
+            x = x.reshape(num_object * num_scene, *x.shape[2:])
+            if num_samples > 1:
+                x = x.repeat_interleave(num_samples, dim=0)
+            batch[key] = x
+        sample_per_object = num_scene * num_samples
+        B_total = num_object * sample_per_object
 
-        # Data preprocessing
-        batch = vqvae_encoder(batch)
+        flat = torch.arange(B_total)
+        flat_scene_ids = (flat // num_samples) % num_scene
+        flat_sample_ids = flat % num_samples
+        flat_seeds = [
+            candidate_seed(base_seed, meta_names[i // sample_per_object],
+                           int(flat_scene_ids[i]), int(flat_sample_ids[i]))
+            for i in range(B_total)
+        ]
 
-        # Inference
-        with accelerator.autocast():
-            predict_link_pose_list = model.inference(batch)
-
-        predict_link_pose_dict = predict_link_pose_list[-1]
+        # Encode + sample in chunks (bounded GPU memory for large num_samples)
+        step_len = chunk_size if chunk_size > 0 else B_total
+        chunk_pose_dicts = []
+        for c0 in range(0, B_total, step_len):
+            c1 = min(c0 + step_len, B_total)
+            sub = {k: batch[k][c0:c1] for k in ["robot_id", "env_pc", "object_pc"]}
+            sub = vqvae_encoder(sub)
+            with accelerator.autocast():
+                pose_list = model.inference(
+                    sub, noise_seeds=flat_seeds[c0:c1] if per_sample_seed else None
+                )
+            chunk_pose_dicts.append(pose_list[-1])
+        predict_link_pose_dict = {
+            name: torch.cat([d[name] for d in chunk_pose_dicts], dim=0)
+            for name in chunk_pose_dicts[0]
+        }
         predict_link_pose_dict_aux = add_aux_link_pose(
             predict_link_pose_dict,
             aux_links,
@@ -372,7 +430,7 @@ def test(config):
         if skipped_samples > 0:
             skipped_ids = (~valid_mask).nonzero().flatten().detach().cpu().tolist()
             skipped_desc = [
-                f"{idx}:{meta_names[idx // sample_per_object]}#{idx % sample_per_object}"
+                f"{idx}:{meta_names[idx // sample_per_object]}#scene{int(flat_scene_ids[idx])}/k{int(flat_sample_ids[idx])}"
                 for idx in skipped_ids[:10]
             ]
             suffix = " ..." if len(skipped_ids) > 10 else ""
@@ -394,7 +452,7 @@ def test(config):
         predict_link_pose_dict_aux_valid = index_pose_dict(predict_link_pose_dict_aux, valid_mask)
         
         # Multi-start Pyroki IK
-        predict_q = solve_ik_multistart(
+        predict_q, ik_select_err = solve_ik_multistart(
             hand_model=hand_model,
             batch_retarget=batch_retarget,
             predict_link_pose_dict=predict_link_pose_dict_valid,
@@ -412,15 +470,12 @@ def test(config):
         # IK error estimation
         ik_link_pose_dict = hand_model.get_link_se3_batch(predict_q)
 
-        _, pos_error = compute_position_error(
-            ik_link_pose_dict,
-            predict_link_pose_dict_valid,
-        )
-
-        _, rot_error = compute_orientation_error(
-            ik_link_pose_dict,
-            predict_link_pose_dict_valid,
-        )
+        # Per-candidate kinematic-consistency residuals (verifier signal 3)
+        ik_pos_err = per_sample_position_error(ik_link_pose_dict, predict_link_pose_dict_valid)
+        ik_rot_err = per_sample_orientation_error(ik_link_pose_dict, predict_link_pose_dict_valid)
+        # Batch averages, same quantity the original script printed
+        pos_error = ik_pos_err.mean().item()
+        rot_error = ik_rot_err.mean().item()
 
         avg_pos_error += pos_error
         avg_rot_error += rot_error
@@ -450,12 +505,22 @@ def test(config):
             ]
             object_valid_compact = compact_index[object_valid_global]
 
+            object_valid_flat = object_valid_global.detach().cpu()
             vis_info.append({
                 "predict_q": predict_q[object_valid_compact].detach().cpu(),
                 "object_pc": batch["object_pc"][start:end][object_valid_mask].detach().cpu(),
                 "env_pc": batch["env_pc"][start:end][object_valid_mask].detach().cpu(),
                 "meta_name": meta_names[meta_id],
-                "valid_scene_ids": object_valid_mask.nonzero().flatten().detach().cpu(),
+                # scene index (into the val file's scenes) of every kept candidate;
+                # repeated num_samples times when num_samples > 1
+                "valid_scene_ids": flat_scene_ids[object_valid_flat],
+                "sample_ids": flat_sample_ids[object_valid_flat],
+                "noise_seeds": torch.tensor([flat_seeds[i] for i in object_valid_flat.tolist()],
+                                            dtype=torch.long),
+                "num_samples": num_samples,
+                "ik_pos_err": ik_pos_err[object_valid_compact].detach().float().cpu(),
+                "ik_rot_err": ik_rot_err[object_valid_compact].detach().float().cpu(),
+                "ik_select_err": ik_select_err[object_valid_compact].detach().float().cpu(),
                 "diffusion": {
                     k: v[start:end][object_valid_mask].detach().cpu()
                     for k, v in predict_link_pose_dict.items()

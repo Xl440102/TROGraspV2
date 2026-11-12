@@ -14,6 +14,7 @@ dataset:
   hand_type: 'xhand'
   batch_size: 10
   seed: 0
+  max_objects: 0        # >0: only the first N objects (sorted by name), for smoke tests
 
 vqvae:
   vqvae_cfg:
@@ -88,6 +89,11 @@ model:
   dtype: bf16
 
 test:
+  # --- test-time scaling (step 0) ---
+  num_samples: 1        # candidates per scene (N)
+  seed: 0               # base seed; candidate seed = crc32(seed/object/scene/sample)
+  per_sample_seed: true # false = original global-RNG sampling
+  chunk_size: 0         # >0: encode + sample at most this many candidates at once
   embodiment: 'xhand'
   save_path: './test/xhand.pth'
   ckpt: './ckpt/eight_hand.pth'

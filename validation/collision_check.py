@@ -190,6 +190,18 @@ def process_one_setting(args, robot_name, step, gpu_id):
             "lifted": lifted.cpu().tolist(),
             "non_collision": non_collision.cpu().tolist(),
             "success": success.cpu().tolist(),
+            # per-candidate ids, aligned with the lists above
+            "scene_ids": torch.as_tensor(
+                info.get("valid_scene_ids", torch.arange(len(predict_q)))
+            ).tolist(),
+            "sample_ids": torch.as_tensor(
+                info.get("sample_ids", torch.zeros(len(predict_q), dtype=torch.long))
+            ).tolist(),
+            # per-candidate continuous collision statistics (candidate 4a signals)
+            "collision_stats": {
+                key: value.detach().cpu().to(torch.float32).tolist()
+                for key, value in stats.items()
+            },
         }
 
     output_pt = os.path.join(sim_data_root, f"{args.output_name}.pt")

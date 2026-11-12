@@ -88,18 +88,17 @@ def prepare_mesh_with_fallback(
 
 
 def process_one_setting(args):
-    step, save_robot_name, val_data_root, val_save_root, exp_root, target_vertex_count = args
+    step, save_robot_name, val_data_root, val_save_root, exp_root, target_vertex_count, object_urdf_root = args
 
     try:
-        sim_data_root = f"{exp_root}/sim/step_{step}"
+        # `step` is the full run tag, e.g. "step_820000" or "tts_N16_seed0"
+        sim_data_root = f"{exp_root}/sim/{step}"
         os.makedirs(sim_data_root, exist_ok=True)
-
-        object_urdf_root = "/mnt/fx/TRO-1B-Dataset/object_urdf"
 
         hand_sim_data_root = f"{sim_data_root}/{save_robot_name}"
         os.makedirs(hand_sim_data_root, exist_ok=True)
 
-        val_data_name = f"step_{step}.pth"
+        val_data_name = f"{step}.pth"
         val_data = torch.load(
             f"{val_save_root}/{save_robot_name}/{val_data_name}",
             weights_only=False
@@ -115,7 +114,7 @@ def process_one_setting(args):
         for data_id, data in tqdm(
             enumerate(val_data),
             total=len(val_data),
-            desc=f"{save_robot_name}-step_{step}"
+            desc=f"{save_robot_name}-{step}"
         ):  
 
             meta_name = data["meta_name"]
@@ -129,7 +128,7 @@ def process_one_setting(args):
 
             if not ok:
                 print(
-                    f"[SKIP] {save_robot_name}, step_{step}, meta={meta_name}, info={mesh_info}",
+                    f"[SKIP] {save_robot_name}, {step}, meta={meta_name}, info={mesh_info}",
                     flush=True
                 )
                 skipped_count += 1
@@ -181,6 +180,8 @@ def process_one_setting(args):
                 meta=env_meta_list,
                 valid_scene_ids=valid_scene_ids.tolist(),
             )
+            if "sample_ids" in data:
+                sim_dict["sample_ids"] = torch.as_tensor(data["sample_ids"]).tolist()
             with open(f"{meta_dir}/val_data.json", "w") as f:
                 json.dump(sim_dict, f)
 
@@ -189,30 +190,48 @@ def process_one_setting(args):
             kept_count += 1
 
         return (
-            f"[OK] {save_robot_name}, step_{step}, total={len(val_data)}, "
+            f"[OK] {save_robot_name}, {step}, total={len(val_data)}, "
             f"kept={kept_count}, copied={copied_count}, "
             f"simplified={simplified_count}, skipped={skipped_count}"
         )
 
     except Exception as e:
-        return f"[ERROR] {save_robot_name}, step_{step}: {e}"
+        return f"[ERROR] {save_robot_name}, {step}: {e}"
+
+
+def parse_args():
+    import argparse
+    parser = argparse.ArgumentParser(
+        description="Turn test.py predictions into per-object Isaac inputs "
+                    "(<exp-root>/sim/<step>/<hand>/<object>/val_data.json + simplified mesh)."
+    )
+    parser.add_argument("--val-data-root", default="/mnt/fx/TRO-1B-Dataset/TRO-val-dataset",
+                        help="folder holding <hand>/<object>.pt validation scenes")
+    parser.add_argument("--object-urdf-root", default="/mnt/fx/TRO-1B-Dataset/object_urdf",
+                        help="folder holding <object>.stl / <object>.urdf")
+    parser.add_argument("--exp-root", default="/mnt/fx/tro_exp/train_0.2B_multi_hand_v6_noise",
+                        help="experiment root; predictions are read from <exp-root>/val/<hand>/<step>.pth")
+    parser.add_argument("--steps", nargs="+", default=["step_820000"],
+                        help="run tags = prediction file names without .pth")
+    parser.add_argument("--robot-names", nargs="+",
+                        default=["xhand", "allegro_hand", "barrett_hand", "leaphand", "shadow_hand",
+                                 "dclaw_gripper", "schunk_hand", "ability_hand"])
+    parser.add_argument("--target-vertex-count", type=int, default=8192)
+    parser.add_argument("--max-workers", type=int, default=8)
+    return parser.parse_args()
 
 
 if __name__ == '__main__':
-    val_data_root = "/mnt/fx/TRO-1B-Dataset/TRO-val-dataset"
-    exp_root = "/mnt/fx/tro_exp/train_0.2B_multi_hand_v6_noise"
-    val_save_root = f"{exp_root}/val"
-
-    steps = ["820000"]
-    robot_names = ["xhand", "allegro_hand", "barrett_hand", "leaphand", "shadow_hand", "dclaw_gripper", "schunk_hand", "ability_hand"]
-    target_vertex_count = 8192
+    args = parse_args()
+    val_save_root = f"{args.exp_root}/val"
 
     tasks = []
-    for step in steps:
-        for robot_name in robot_names:
-            tasks.append((step, robot_name, val_data_root, val_save_root, exp_root, target_vertex_count))
+    for step in args.steps:
+        for robot_name in args.robot_names:
+            tasks.append((step, robot_name, args.val_data_root, val_save_root, args.exp_root,
+                          args.target_vertex_count, args.object_urdf_root))
 
-    with ProcessPoolExecutor(max_workers=8) as executor:
+    with ProcessPoolExecutor(max_workers=args.max_workers) as executor:
         futures = [executor.submit(process_one_setting, task) for task in tasks]
 
         for future in as_completed(futures):

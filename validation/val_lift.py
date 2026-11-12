@@ -64,13 +64,17 @@ def validate_isaac(
 
 
 def process_one_setting(args):
-    robot_name, step, gpu_id = args
+    robot_name, step, gpu_id, sim_root, bsz = args
 
-    sim_data_root = f"/mnt/fx/tro_exp/train_0.2B_multi_hand_v6_noise/sim/{step}/{robot_name}"
+    sim_data_root = f"{sim_root}/{step}/{robot_name}"
     sr_dict = {}
     success_dict = {}
-    bsz = 50
-    meta_names = [file for file in os.listdir(sim_data_root) if "sr" not in file]
+    # bsz = objects per Isaac process; each object contributes
+    # (#scenes x num_samples) envs, so lower it when num_samples is large.
+    meta_names = sorted(
+        file for file in os.listdir(sim_data_root)
+        if os.path.isdir(os.path.join(sim_data_root, file))
+    )
 
     for batch_start in range(0, len(meta_names), bsz):
         batch_meta_names = meta_names[batch_start: batch_start + bsz]
@@ -122,18 +126,32 @@ def process_one_setting(args):
     return f"[DONE] GPU {gpu_id} | {robot_name} | {step} | avg_sr={avg_sr:.6f}"
 
 
+def parse_args():
+    import argparse
+    parser = argparse.ArgumentParser(description="Isaac Gym lift test for converted predictions.")
+    parser.add_argument("--sim-root", default="/mnt/fx/tro_exp/train_0.2B_multi_hand_v6_noise/sim",
+                        help="<exp-root>/sim written by convert_before_eval.py")
+    parser.add_argument("--steps", nargs="+", default=["step_820000"])
+    parser.add_argument("--robot-names", nargs="+",
+                        default=["allegro_hand", "barrett_hand", "shadow_hand", "leaphand", "xhand",
+                                 "dclaw_gripper", "schunk_hand", "ability_hand"])
+    parser.add_argument("--gpus", nargs="+", type=int, default=None,
+                        help="GPU ids to use (default: 0..7); tasks are assigned round-robin")
+    parser.add_argument("--bsz", type=int, default=50, help="objects per Isaac process")
+    parser.add_argument("--max-workers", type=int, default=8)
+    return parser.parse_args()
+
+
 if __name__ == "__main__":
+    args = parse_args()
+    gpus = args.gpus if args.gpus else list(range(8))
 
-    robot_names = ["allegro_hand", "barrett_hand", "shadow_hand", "leaphand", "xhand", "dclaw_gripper", "schunk_hand", "ability_hand"]
-    steps = ["step_820000"]
     tasks = []
-    gpu_id = 0
-    for step in steps:
-        for robot_name in robot_names:
-            tasks.append((robot_name, step, gpu_id))
-            gpu_id += 1
+    for step in args.steps:
+        for robot_name in args.robot_names:
+            tasks.append((robot_name, step, gpus[len(tasks) % len(gpus)], args.sim_root, args.bsz))
 
-    with ProcessPoolExecutor(max_workers=8) as executor:
+    with ProcessPoolExecutor(max_workers=min(args.max_workers, len(tasks))) as executor:
         futures = [executor.submit(process_one_setting, task) for task in tasks]
 
         for future in as_completed(futures):
