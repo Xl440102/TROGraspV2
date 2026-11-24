@@ -33,6 +33,7 @@ class TROFilteredIterDataset(Dataset):
         dtype: torch.dtype = torch.float32,
         seed: int = 0,
         max_objects: int = 0,
+        object_pc_root: str = None,
     ):
         super().__init__()
         self.data_root = f"{data_root}/{hand_type}"
@@ -41,7 +42,10 @@ class TROFilteredIterDataset(Dataset):
         if max_objects:
             self.test_metas = self.test_metas[:max_objects]
         self.align_meta = torch.load(align_meta_path, map_location="cpu", weights_only=False)
-        self.object_pc_root = f"/mnt/fx/TRO-1B-Dataset/object_pc"
+        # default: <dataset root>/object_pc, next to TRO-val-dataset (README layout)
+        self.object_pc_root = object_pc_root or os.path.join(
+            os.path.dirname(os.path.normpath(data_root)), "object_pc"
+        )
         self.hand_type = hand_type
         self.hand_model = create_hand_model(hand_type, device="cpu")
         self.robot_id = hand_list.index(hand_type)
@@ -170,6 +174,7 @@ def create_dataloader(cfg):
         hand_list=cfg.hand_list,
         seed=cfg.seed,
         max_objects=int(cfg.get("max_objects", 0) or 0),
+        object_pc_root=cfg.get("object_pc_root", None),
     )
 
     dataloader = DataLoader(
